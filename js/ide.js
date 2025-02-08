@@ -55,7 +55,7 @@ var layoutConfig = {
         type: "row",
         content: [{
             type: "component",
-            width: 66,
+            width: 60,
             componentName: "source",
             id: "source",
             title: "Source Code",
@@ -65,6 +65,7 @@ var layoutConfig = {
             }
         }, {
             type: "column",
+            width: 25,
             content: [{
                 type: "component",
                 componentName: "stdin",
@@ -84,11 +85,21 @@ var layoutConfig = {
                     readOnly: true
                 }
             }]
+        }, {
+            type: "component",
+            width: 15,
+            componentName: "chat",
+            id: "chat",
+            title: "Chat",
+            isClosable: false
         }]
     }]
 };
 
 var gPuterFile;
+
+// Add keyboard shortcut constant
+const POPUP_SHORTCUT = navigator.platform.includes('Mac') ? 'Meta+e' : 'Ctrl+E';
 
 function encode(str) {
     return btoa(unescape(encodeURIComponent(str || "")));
@@ -579,6 +590,48 @@ document.addEventListener("DOMContentLoaded", async function () {
                 fontFamily: "JetBrains Mono",
                 minimap: {
                     enabled: false
+                }
+            });
+        });
+
+        layout.registerComponent("chat", function(container, state) {
+            const $el = container.getElement();
+            $el.html(`
+                <div class="chat-container">
+                    <div class="chat-messages"></div>
+                    <div class="chat-input-container">
+                        <input type="text" class="chat-input" placeholder="Type your message...">
+                        <button class="chat-send-btn">Send</button>
+                    </div>
+                </div>
+            `);
+
+            const chatInput = $el.find('.chat-input');
+            const chatSend = $el.find('.chat-send-btn');
+            const chatMessages = $el.find('.chat-messages');
+
+            function addMessage(text, isUser = true) {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `chat-message ${isUser ? 'outgoing' : 'incoming'}`;
+                messageDiv.textContent = text;
+                chatMessages[0].appendChild(messageDiv);
+                chatMessages[0].scrollTop = chatMessages[0].scrollHeight;
+            }
+
+            chatSend.on('click', () => {
+                const message = chatInput.val().trim();
+                if (message) {
+                    addMessage(message, true);
+                    chatInput.val('');
+                    setTimeout(() => {
+                        addMessage('This is a mock response. Implement actual chat functionality here.', false);
+                    }, 1000);
+                }
+            });
+
+            chatInput.on('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    chatSend.click();
                 }
             });
         });
