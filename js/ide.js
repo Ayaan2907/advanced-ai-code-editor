@@ -1219,91 +1219,43 @@ function getLanguageForExtension(extension) {
 }
 
 const AI_MODELS = {
-    'openai': {
-        baseURL: 'https://api.openai.com/v1/chat/completions',
+    'openrouter': {
+        baseURL: 'https://openrouter.ai/api/v1/chat/completions',
         models: {
-            'gpt-4': {
-                name: 'GPT-4',
+            'deepseek/deepseek-r1:free': {
+                name: 'DeepSeek R1 (Free)',
                 maxTokens: 4096
             },
-            'gpt-3.5-turbo': {
-                name: 'GPT-3.5 Turbo',
+            'google/gemini-2.0-flash-001': {
+                name: 'Gemini 2.0 Flash',
                 maxTokens: 4096
-            }
-        },
-        headers: (apiKey) => ({
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-        }),
-        prepareRequest: (model, message) => ({
-            model: model,
-            messages: [{
-                role: 'user',
-                content: message
-            }],
-            temperature: 0.7
-        }),
-        extractResponse: (data) => data.choices[0].message.content
-    },
-    'anthropic': {
-        baseURL: 'https://api.anthropic.com/v1/messages',
-        models: {
-            'claude-3-opus': {
+            },
+            'google/gemini-2.0-pro': {
+                name: 'Gemini 2.0 Pro',
+                maxTokens: 4096
+            },
+            'anthropic/claude-3-opus': {
                 name: 'Claude 3 Opus',
                 maxTokens: 4096
             },
-            'claude-3-sonnet': {
+            'anthropic/claude-3-sonnet': {
                 name: 'Claude 3 Sonnet',
                 maxTokens: 4096
-            }
-        },
-        headers: (apiKey) => ({
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01'
-        }),
-        prepareRequest: (model, message) => ({
-            model: model,
-            messages: [{
-                role: 'user',
-                content: message
-            }],
-            max_tokens: 1024
-        }),
-        extractResponse: (data) => data.content[0].text
-    },
-    'google': {
-        baseURL: (apiKey) => `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${apiKey}`,
-        models: {
-            'gemini-pro': {
-                name: 'Gemini Pro',
-                maxTokens: 2048
-            }
-        },
-        headers: () => ({
-            'Content-Type': 'application/json'
-        }),
-        prepareRequest: (model, message) => ({
-            contents: [{
-                parts: [{
-                    text: message
-                }]
-            }]
-        }),
-        extractResponse: (data) => data.candidates[0].content.parts[0].text
-    },
-    // Example of how to add a new provider:
-    'deepseek': {
-        baseURL: 'https://api.deepseek.com/v1/chat/completions',  // Replace with actual API endpoint
-        models: {
-            'deepseek-coder': {
-                name: 'DeepSeek Coder',
+            },
+            'meta-llama/llama-2-70b-chat': {
+                name: 'Llama 2 70B',
+                maxTokens: 4096
+            },
+            'mistral/mixtral-8x7b': {
+                name: 'Mixtral 8x7B',
                 maxTokens: 4096
             }
         },
         headers: (apiKey) => ({
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
+            'Authorization': `Bearer ${apiKey}`,
+            'HTTP-Referer': window.location.href,
+            'X-Title': 'Advanced AI Code Editor'
         }),
         prepareRequest: (model, message) => ({
             model: model,
@@ -1311,9 +1263,15 @@ const AI_MODELS = {
                 role: 'user',
                 content: message
             }],
-            temperature: 0.7
+            temperature: 0.7,
+            max_tokens: 4096
         }),
-        extractResponse: (data) => data.choices[0].message.content
+        extractResponse: (data) => {
+            if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+                throw new Error('Invalid response format from OpenRouter');
+            }
+            return data.choices[0].message.content;
+        }
     }
 };
 
