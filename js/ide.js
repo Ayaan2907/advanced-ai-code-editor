@@ -101,6 +101,10 @@ var gPuterFile;
 // Add keyboard shortcut constant
 const POPUP_SHORTCUT = navigator.platform.includes('Mac') ? 'Meta+e' : 'Ctrl+E';
 
+// Add selection tracking
+var lastSelection = null;
+var lastSelectionText = '';
+
 function encode(str) {
     return btoa(unescape(encodeURIComponent(str || "")));
 }
@@ -565,60 +569,79 @@ document.addEventListener("DOMContentLoaded", async function () {
             return selectionActionBtn;
         }
 
-        function handleSelection(editor) {
+        function handleSelection(editor, showPopup = false) {
             const selection = editor.getSelection();
-            if (!selection) return;
+            if (!selection || selection.isEmpty()) {
+                hideSelectionPopup();
+                hideSelectionButton();
+                return;
+            }
             
             const selectedText = editor.getModel().getValueInRange(selection);
-            
             if (!selectedText || !selectedText.trim()) {
-                if (selectionActionBtn) {
-                    selectionActionBtn.classList.remove('visible');
-                }
+                hideSelectionPopup();
+                hideSelectionButton();
                 return;
             }
 
-            // Get coordinates
-            const startPos = selection.getStartPosition();
-            const startCoords = editor.getScrolledVisiblePosition(startPos);
-            
-            // Get editor container position
-            const editorContainer = editor.getDomNode();
-            const rect = editorContainer.getBoundingClientRect();
-            
-            // Create and position the button
+            // Store selection for later use
+            lastSelection = selection;
+            lastSelectionText = selectedText;
+
+            // Only show popup if explicitly requested
+            if (showPopup) {
+                const startPos = selection.getStartPosition();
+                const endPos = selection.getEndPosition();
+                const startCoords = editor.getScrolledVisiblePosition(startPos);
+                
+                const editorContainer = editor.getDomNode();
+                const rect = editorContainer.getBoundingClientRect();
+                
+                showSelectionPopup(
+                    rect.left + startCoords.left,
+                    rect.top + startCoords.top - 10,
+                    selection.startLineNumber,
+                    selection.endLineNumber
+                );
+            } else {
+                // Show the floating action button instead
+                const endPos = selection.getEndPosition();
+                const endCoords = editor.getScrolledVisiblePosition(endPos);
+                
+                const editorContainer = editor.getDomNode();
+                const rect = editorContainer.getBoundingClientRect();
+                
+                showSelectionButton(
+                    rect.left + endCoords.left + 10,
+                    rect.top + endCoords.top
+                );
+            }
+        }
+
+        function showSelectionButton(x, y) {
             const btn = createSelectionButton();
-            
-            // Position button near the start of the selection
-            const x = rect.left + startCoords.left - 30;
-            const y = rect.top + startCoords.top - 30;
-            
             btn.style.left = `${x}px`;
             btn.style.top = `${y}px`;
-            btn.classList.add('visible');
+            btn.style.display = 'block';
+            btn.onclick = () => {
+                hideSelectionButton();
+                handleSelection(sourceEditor, true);
+            };
+        }
 
-            // Remove old event listeners
-            const newBtn = btn.cloneNode(true);
-            btn.parentNode.replaceChild(newBtn, btn);
-            selectionActionBtn = newBtn;
-
-            // Add click handler
-            selectionActionBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                e.preventDefault();
-                
-                // Create popup
-                const popupX = x + 60;  // Offset from the button
-                const popupY = y + 60;
-                
-                showInlinePopup(popupX, popupY, selectedText);
-                
-                selectionActionBtn.classList.remove('visible');
-            });
+        function hideSelectionButton() {
+            const btn = document.querySelector('.selection-action-btn');
+            if (btn) {
+                btn.style.display = 'none';
+            }
         }
 
         function formatCodeBlock(code, language = '') {
-            return `<pre><code class="language-${language}">${escapeHtml(code)}</code></pre>`;
+            // Trim any extra whitespace and normalize line endings
+            const normalizedCode = code.replace(/\r\n/g, '\n').trim();
+            // Remove any leading/trailing empty lines
+            const cleanedCode = normalizedCode.replace(/^\n+|\n+$/g, '');
+            return `<pre><code class="language-${language}">${escapeHtml(cleanedCode)}</code></pre>`;
         }
 
         function escapeHtml(text) {
@@ -669,90 +692,426 @@ document.addEventListener("DOMContentLoaded", async function () {
                 .replace(/\n\s*\n/g, '<br>');
         }
 
-        function showInlinePopup(x, y, selectedText) {
-            // Create popup container
+        function createSelectionPopup() {
             const popup = document.createElement('div');
-            popup.className = 'inline-popup';
+            popup.className = 'selection-popup';
+            popup.innerHTML = `
+                <div class="selection-popup-header">
+                    <span class="selection-icon">💡</span>
+                    <span class="selection-text">Selected Code Actions</span>
+                    <span class="line-info"></span>
+                </div>
+                <div class="selection-popup-input-container">
+                    <input type="text" class="selection-popup-input" placeholder="Ask a question or request code suggestion...">
+                </div>
+                <div class="selection-popup-preview" style="display: none">
+                    <div class="preview-header">
+                        <span class="preview-title">Suggested Changes</span>
+                        <div class="preview-actions">
+                            <button class="selection-popup-btn apply-btn">Apply Changes</button>
+                            <button class="selection-popup-btn secondary cancel-preview-btn">Cancel</button>
+                        </div>
+                    </div>
+                    <pre class="preview-content"><code></code></pre>
+                </div>
+                <div class="selection-popup-actions">
+                    <button class="selection-popup-btn ask-btn">Ask Question</button>
+                    <button class="selection-popup-btn suggest-btn">Get Suggestion</button>
+                    <button class="selection-popup-btn secondary cancel-btn">Cancel</button>
+                </div>
+                <div class="selection-popup-hint">
+                    Press Enter to ask, Shift+Enter for suggestion, Esc to close
+                </div>
+            `;
+            document.body.appendChild(popup);
+
+            // Make the popup draggable
+            let isDragging = false;
+            let currentX;
+            let currentY;
+            let initialX;
+            let initialY;
+            let xOffset = 0;
+            let yOffset = 0;
+
+            const dragStart = (e) => {
+                if (e.target.closest('.selection-popup-input') || e.target.closest('button')) {
+                    return;
+                }
+                
+                initialX = e.clientX - xOffset;
+                initialY = e.clientY - yOffset;
+
+                if (e.target.closest('.selection-popup-header')) {
+                    isDragging = true;
+                }
+            };
+
+            const dragEnd = () => {
+                isDragging = false;
+            };
+
+            const drag = (e) => {
+                if (isDragging) {
+                    e.preventDefault();
+                    currentX = e.clientX - initialX;
+                    currentY = e.clientY - initialY;
+
+                    xOffset = currentX;
+                    yOffset = currentY;
+
+                    popup.style.transform = `translate(${currentX}px, ${currentY}px)`;
+                }
+            };
+
+            popup.addEventListener('mousedown', dragStart);
+            document.addEventListener('mousemove', drag);
+            document.addEventListener('mouseup', dragEnd);
+
+            return popup;
+        }
+
+        function showSelectionPopup(x, y, startLine, endLine) {
+            const popup = document.querySelector('.selection-popup') || createSelectionPopup();
+            
+            // Update line info
+            const lineInfo = popup.querySelector('.line-info');
+            lineInfo.textContent = `Lines ${startLine}-${endLine}`;
+            
+            // Position popup
             popup.style.left = `${x}px`;
             popup.style.top = `${y}px`;
             
-            // Create content
-            popup.innerHTML = `
-                <div class="popup-actions">
-                    <button class="action-btn explain">Explain Code</button>
-                    <button class="action-btn improve">Improve Code</button>
-                    <button class="action-btn docs">Generate Docs</button>
-                    <button class="action-btn test">Generate Tests</button>
-                </div>
-                <div class="popup-content"></div>
-            `;
-
-            // Remove existing popup if any
-            const existingPopup = document.querySelector('.inline-popup');
-            if (existingPopup) {
-                existingPopup.remove();
-            }
-
-            // Add to document
-            document.body.appendChild(popup);
-
-            // Handle action clicks
-            const actions = popup.querySelectorAll('.action-btn');
-            const content = popup.querySelector('.popup-content');
-
-            actions.forEach(btn => {
-                btn.addEventListener('click', async () => {
-                    const action = btn.classList[1];
-                    let prompt = '';
-                    
-                    switch(action) {
-                        case 'explain':
-                            prompt = `Explain this code:\n${selectedText}`;
-                            break;
-                        case 'improve':
-                            prompt = `Suggest improvements for this code:\n${selectedText}`;
-                            break;
-                        case 'docs':
-                            prompt = `Generate documentation for this code:\n${selectedText}`;
-                            break;
-                        case 'test':
-                            prompt = `Generate unit tests for this code:\n${selectedText}`;
-                            break;
+            // Show popup with animation
+            popup.classList.add('visible');
+            
+            // Setup event handlers
+            const input = popup.querySelector('.selection-popup-input');
+            const askBtn = popup.querySelector('.ask-btn');
+            const suggestBtn = popup.querySelector('.suggest-btn');
+            const cancelBtn = popup.querySelector('.cancel-btn');
+            const previewSection = popup.querySelector('.selection-popup-preview');
+            const applyBtn = popup.querySelector('.apply-btn');
+            const cancelPreviewBtn = popup.querySelector('.cancel-preview-btn');
+            const previewContent = popup.querySelector('.preview-content code');
+            
+            input.focus();
+            
+            // Remove old event listeners
+            input.onkeydown = null;
+            askBtn.onclick = null;
+            suggestBtn.onclick = null;
+            cancelBtn.onclick = null;
+            applyBtn.onclick = null;
+            cancelPreviewBtn.onclick = null;
+            
+            // Add new event listeners
+            input.onkeydown = (e) => {
+                if (e.key === 'Enter') {
+                    if (e.shiftKey) {
+                        handleSuggestion(input.value, previewSection, previewContent);
+                    } else {
+                        handleQuestion(input.value);
                     }
-
-                    content.innerHTML = '<div class="loading">Processing...</div>';
+                } else if (e.key === 'Escape') {
+                    hideSelectionPopup();
+                }
+                e.stopPropagation(); // Prevent editor from handling the key events
+            };
+            
+            askBtn.onclick = () => handleQuestion(input.value);
+            suggestBtn.onclick = () => handleSuggestion(input.value, previewSection, previewContent);
+            cancelBtn.onclick = hideSelectionPopup;
+            
+            applyBtn.onclick = () => {
+                if (lastSelection) {
+                    // Clean up the code before applying
+                    const cleanCode = previewContent.textContent
+                        .replace(/\r\n/g, '\n') // Normalize line endings
+                        .trim(); // Remove leading/trailing whitespace
                     
+                    sourceEditor.executeEdits('chat-suggestion', [{
+                        range: lastSelection,
+                        text: cleanCode,
+                        forceMoveMarkers: true
+                    }]);
+                    hideSelectionPopup();
+                } else {
+                    showError('Error', 'Please select the code you want to replace first.');
+                }
+            };
+            
+            cancelPreviewBtn.onclick = () => {
+                previewSection.style.display = 'none';
+                popup.querySelector('.selection-popup-actions').style.display = 'grid';
+                input.value = '';
+                input.focus();
+            };
+
+            // Prevent hiding when interacting with popup
+            popup.addEventListener('mousedown', (e) => {
+                e.stopPropagation();
+            });
+        }
+
+        function hideSelectionPopup() {
+            const popup = document.querySelector('.selection-popup');
+            if (popup) {
+                popup.classList.remove('visible');
+            }
+        }
+
+        function handleQuestion(question) {
+            if (!question.trim()) return;
+            
+            // Switch to chat panel
+            const chatItem = layout.root.getItemsById('chat')[0];
+            chatItem.parent.header.parent.setActiveContentItem(chatItem);
+            
+            // Get the chat input and send button
+            const chatContainer = chatItem.element[0].querySelector('.chat-container');
+            const chatInput = chatContainer.querySelector('.chat-input');
+            const sendBtn = chatContainer.querySelector('.chat-send-btn');
+            
+            // Set the question and trigger send
+            chatInput.value = question;
+            sendBtn.click();
+            
+            // Hide the popup
+            hideSelectionPopup();
+        }
+
+        function createSuggestionsProvider() {
+            return {
+                triggerCharacters: ['.', ' '],
+                provideCompletionItems: async (model, position, context, token) => {
                     try {
-                        const model = modelSelect.val();
-                        const apiKey = apiKeyInput.val().trim();
+                        const apiKey = localStorage.getItem('chat_api_key');
+                        const selectedModel = localStorage.getItem('chat_model') || 'anthropic/claude-3-sonnet';
                         
                         if (!apiKey) {
-                            content.innerHTML = '<div class="error">Please enter an API key first.</div>';
-                            return;
+                            return { suggestions: [] };
                         }
 
-                        const response = await callAI(model, apiKey, prompt);
-                        content.innerHTML = `<div class="response">${formatMarkdown(response)}</div>`;
+                        // Get current line and word
+                        const lineContent = model.getLineContent(position.lineNumber);
+                        const word = model.getWordAtPosition(position);
                         
-                        // Apply syntax highlighting to code blocks
-                        content.querySelectorAll('pre code').forEach(block => {
-                            if (window.hljs) {
-                                hljs.highlightElement(block);
-                            }
-                        });
-                    } catch (error) {
-                        content.innerHTML = `<div class="error">Error: ${error.message}</div>`;
-                    }
-                });
-            });
+                        // Check if this is a refactoring request
+                        const isRefactorRequest = lineContent.toLowerCase().includes('refactor') || 
+                                                lineContent.toLowerCase().includes('improve');
 
-            // Close popup when clicking outside
-            document.addEventListener('click', function closePopup(e) {
-                if (!popup.contains(e.target) && !selectionActionBtn.contains(e.target)) {
-                    popup.remove();
-                    document.removeEventListener('click', closePopup);
+                        // Get any active markers (errors) at the current position
+                        const markers = monaco.editor.getModelMarkers({ resource: model.uri })
+                            .filter(marker => 
+                                marker.severity === monaco.MarkerSeverity.Error &&
+                                marker.startLineNumber <= position.lineNumber &&
+                                marker.endLineNumber >= position.lineNumber
+                            );
+
+                        let suggestions = [];
+
+                        // If there's a selection, provide improvement suggestions
+                        const selection = sourceEditor.getSelection();
+                        if (selection && !selection.isEmpty()) {
+                            const selectedText = model.getValueInRange(selection);
+                            const prompt = isRefactorRequest 
+                                ? "Refactor and improve this code while maintaining its functionality."
+                                : "Suggest improvements for this code. Keep the same functionality but make it better.";
+                            
+                            const message = `Given this code:
+\`\`\`
+${selectedText}
+\`\`\`
+
+${prompt}
+
+Provide only the improved code. No explanations.`;
+
+                            const response = await callAI(selectedModel, apiKey, message);
+                            
+                            suggestions.push({
+                                label: isRefactorRequest ? 'Refactored Code' : 'AI Suggestion',
+                                kind: monaco.languages.CompletionItemKind.Snippet,
+                                documentation: isRefactorRequest ? 'Refactored version of the selected code' : 'AI-suggested code improvement',
+                                insertText: response.trim(),
+                                range: selection,
+                                sortText: '0'
+                            });
+                        }
+
+                        // If there are errors, provide fix suggestions
+                        if (markers.length > 0) {
+                            const errorContext = markers.map(marker => ({
+                                message: marker.message,
+                                code: model.getValueInRange({
+                                    startLineNumber: Math.max(1, marker.startLineNumber - 2),
+                                    endLineNumber: Math.min(model.getLineCount(), marker.endLineNumber + 2),
+                                    startColumn: 1,
+                                    endColumn: model.getLineMaxColumn(marker.endLineNumber)
+                                })
+                            }));
+
+                            const message = `Fix these errors in the code:
+${errorContext.map(err => `Error: ${err.message}
+Code context:
+\`\`\`
+${err.code}
+\`\`\`
+`).join('\n')}
+
+Provide only the corrected code. No explanations.`;
+
+                            const response = await callAI(selectedModel, apiKey, message);
+                            
+                            suggestions.push({
+                                label: 'Fix Error',
+                                kind: monaco.languages.CompletionItemKind.Snippet,
+                                documentation: 'AI-suggested fix for the current error',
+                                insertText: response.trim(),
+                                range: {
+                                    startLineNumber: markers[0].startLineNumber,
+                                    endLineNumber: markers[0].endLineNumber,
+                                    startColumn: markers[0].startColumn,
+                                    endColumn: markers[0].endColumn
+                                },
+                                sortText: '1'
+                            });
+                        }
+
+                        // Always provide inline completions for the current line
+                        if (word) {
+                            const linePrefix = lineContent.substring(0, word.endColumn - 1);
+                            const message = `Complete this line of code:
+\`\`\`
+${linePrefix}
+\`\`\`
+
+Provide only the completion. No explanations.`;
+
+                            const response = await callAI(selectedModel, apiKey, message);
+                            
+                            suggestions.push({
+                                label: 'Line Completion',
+                                kind: monaco.languages.CompletionItemKind.Text,
+                                documentation: 'AI-suggested line completion',
+                                insertText: response.trim(),
+                                range: {
+                                    startLineNumber: position.lineNumber,
+                                    endLineNumber: position.lineNumber,
+                                    startColumn: word.endColumn,
+                                    endColumn: word.endColumn
+                                },
+                                sortText: '2'
+                            });
+                        }
+
+                        return { suggestions };
+                    } catch (error) {
+                        console.error('Error getting suggestions:', error);
+                        return { suggestions: [] };
+                    }
                 }
-            });
+            };
+        }
+
+        function createInlineCompletionsProvider() {
+            return {
+                provideInlineCompletions: async (model, position, context, token) => {
+                    try {
+                        const apiKey = localStorage.getItem('chat_api_key');
+                        const selectedModel = localStorage.getItem('chat_model') || 'anthropic/claude-3-sonnet';
+                        
+                        if (!apiKey) {
+                            return { items: [] };
+                        }
+
+                        // Get the current line and any errors
+                        const lineContent = model.getLineContent(position.lineNumber);
+                        const textUntilPosition = lineContent.substring(0, position.column - 1);
+                        
+                        // Check for errors in current line
+                        const markers = monaco.editor.getModelMarkers({ resource: model.uri })
+                            .filter(marker => 
+                                marker.severity === monaco.MarkerSeverity.Error &&
+                                marker.startLineNumber === position.lineNumber
+                            );
+
+                        let prompt = 'Complete this line of code:';
+                        if (markers.length > 0) {
+                            prompt = `Fix this error: ${markers[0].message}\nComplete this line of code:`;
+                        }
+
+                        const message = `${prompt}
+\`\`\`
+${textUntilPosition}
+\`\`\`
+
+Provide only the completion. No explanations.`;
+
+                        const response = await callAI(selectedModel, apiKey, message);
+                        
+                        return {
+                            items: [{
+                                text: response.trim(),
+                                range: {
+                                    startLineNumber: position.lineNumber,
+                                    startColumn: position.column,
+                                    endLineNumber: position.lineNumber,
+                                    endColumn: position.column
+                                }
+                            }]
+                        };
+                    } catch (error) {
+                        console.error('Error getting inline completion:', error);
+                        return { items: [] };
+                    }
+                }
+            };
+        }
+
+        async function handleSuggestion(prompt, previewSection, previewContent) {
+            if (!prompt.trim()) return;
+
+            const selection = sourceEditor.getSelection();
+            if (!selection) return;
+
+            try {
+                const apiKey = localStorage.getItem('chat_api_key');
+                const selectedModel = localStorage.getItem('chat_model') || 'anthropic/claude-3-sonnet';
+                
+                if (!apiKey) {
+                    showError('Error', 'Please enter an API key in the chat panel first.');
+                    return;
+                }
+
+                const selectedText = sourceEditor.getModel().getValueInRange(selection);
+                
+                const message = `Given this code:
+\`\`\`
+${selectedText}
+\`\`\`
+
+User request: ${prompt}
+
+Provide only the improved/suggested code that should replace the selection. No explanations, just the code.`;
+
+                // Show loading state
+                previewContent.textContent = 'Loading suggestion...';
+                previewSection.style.display = 'block';
+                document.querySelector('.selection-popup-actions').style.display = 'none';
+
+                const response = await callAI(selectedModel, apiKey, message);
+                
+                // Show the suggestion in the preview
+                previewContent.textContent = response.trim();
+                if (window.hljs) {
+                    hljs.highlightElement(previewContent);
+                }
+            } catch (error) {
+                previewContent.textContent = `Error: ${error.message}`;
+                previewContent.style.color = 'var(--vscode-errorForeground, #f48771)';
+            }
         }
 
         layout.registerComponent("source", function (container, state) {
@@ -764,37 +1123,57 @@ document.addEventListener("DOMContentLoaded", async function () {
                 fontFamily: "JetBrains Mono",
                 minimap: {
                     enabled: true
-                }
-            });
-
-            // Add selection change handler
-            sourceEditor.onDidChangeCursorSelection(() => {
-                handleSelection(sourceEditor);
-            });
-
-            // Hide button when editor loses focus
-            sourceEditor.onDidBlurEditorText(() => {
-                if (selectionActionBtn) {
-                    setTimeout(() => {
-                        if (!selectionActionBtn.matches(':hover')) {
-                            selectionActionBtn.classList.remove('visible');
+                },
+                contextmenu: true,
+                // Add actions to the editor's context menu
+                contextMenuActionsProvider: () => {
+                    return [
+                        {
+                            id: 'askAboutCode',
+                            label: 'Ask About Code',
+                            keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE],
+                            run: (editor) => {
+                                handleSelection(editor, true);
+                            }
                         }
-                    }, 200);
+                    ];
                 }
             });
 
-            // Add keyboard shortcut
+            // Register the suggestions provider
+            const suggestionsDisposable = monaco.languages.registerCompletionItemProvider('*', createSuggestionsProvider());
+
+            // Register the inline completions provider
+            const inlineCompletionsDisposable = monaco.languages.registerInlineCompletionsProvider('*', createInlineCompletionsProvider());
+
+            // Track selection changes
+            sourceEditor.onDidChangeCursorSelection((e) => {
+                // Only update the selection tracking, don't show popup
+                if (!e.source) { // Only handle mouse/keyboard selection changes
+                    handleSelection(sourceEditor, false);
+                }
+            });
+
+            // Clean up providers when editor is disposed
+            sourceEditor.onDidDispose(() => {
+                suggestionsDisposable.dispose();
+                inlineCompletionsDisposable.dispose();
+            });
+
+            // Only hide popup when clicking outside of it and the editor
+            document.addEventListener('mousedown', (e) => {
+                if (!e.target.closest('.selection-popup') && 
+                    !e.target.closest('.monaco-editor') && 
+                    !e.target.closest('.selection-action-btn')) {
+                    hideSelectionPopup();
+                }
+            });
+
+            // Add keyboard shortcut for showing popup
             sourceEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, () => {
                 const selection = sourceEditor.getSelection();
                 if (selection && !selection.isEmpty()) {
-                    const selectedText = sourceEditor.getModel().getValueInRange(selection);
-                    const pos = sourceEditor.getScrolledVisiblePosition(selection.getStartPosition());
-                    const editorRect = sourceEditor.getDomNode().getBoundingClientRect();
-                    showInlinePopup(
-                        editorRect.left + pos.left + 30,
-                        editorRect.top + pos.top + 30,
-                        selectedText
-                    );
+                    handleSelection(sourceEditor, true);
                 }
             });
 
@@ -845,9 +1224,10 @@ document.addEventListener("DOMContentLoaded", async function () {
                         </select>
                         <input type="password" class="chat-api-key" placeholder="Enter your API key">
                     </div>
+                    <div class="selection-indicator"></div>
                     <div class="chat-messages"></div>
                     <div class="chat-input-container">
-                        <input type="text" class="chat-input" placeholder="Ask here...">
+                        <input type="text" class="chat-input" placeholder="${lastSelection ? 'Ask about selected code...' : 'Ask here...'}">
                         <button class="chat-send-btn">Send</button>
                     </div>
                 </div>
@@ -858,6 +1238,43 @@ document.addEventListener("DOMContentLoaded", async function () {
             const chatMessages = $el.find('.chat-messages');
             const modelSelect = $el.find('.chat-model-select');
             const apiKeyInput = $el.find('.chat-api-key');
+            const selectionIndicator = $el.find('.selection-indicator');
+
+            function updateSelectionIndicator() {
+                if (lastSelection && lastSelectionText) {
+                    const lines = lastSelectionText.split('\n').length;
+                    selectionIndicator.html(`
+                        <div class="selection-info">
+                            <span class="selection-icon">📎</span>
+                            <span class="selection-text">
+                                Selected: ${lines} line${lines > 1 ? 's' : ''} 
+                                (${lastSelection.startLineNumber}-${lastSelection.endLineNumber})
+                            </span>
+                            <button class="clear-selection">×</button>
+                        </div>
+                    `).show();
+                } else {
+                    selectionIndicator.empty().hide();
+                }
+            }
+
+            // Update selection indicator when selection changes
+            sourceEditor.onDidChangeCursorSelection(() => {
+                const selection = sourceEditor.getSelection();
+                chatInput.attr('placeholder', selection && !selection.isEmpty() ? 'Ask about selected code...' : 'Ask here...');
+                updateSelectionIndicator();
+            });
+
+            // Handle clear selection button
+            selectionIndicator.on('click', '.clear-selection', () => {
+                lastSelection = null;
+                lastSelectionText = '';
+                updateSelectionIndicator();
+                chatInput.attr('placeholder', 'Ask here...');
+            });
+
+            // Initial update
+            updateSelectionIndicator();
 
             // Load saved API key if exists
             const savedApiKey = localStorage.getItem('chat_api_key');
@@ -901,6 +1318,107 @@ document.addEventListener("DOMContentLoaded", async function () {
                         if (window.hljs) {
                             hljs.highlightElement(block);
                         }
+                        
+                        // Add apply code button for code blocks
+                        const codeContainer = block.parentElement;
+                        const applyButton = document.createElement('button');
+                        applyButton.className = 'apply-code-btn';
+                        applyButton.textContent = 'Apply Changes';
+                        
+                        // Create preview button
+                        const previewButton = document.createElement('button');
+                        previewButton.className = 'preview-code-btn';
+                        previewButton.textContent = 'Preview';
+                        
+                        // Add buttons container
+                        const buttonsContainer = document.createElement('div');
+                        buttonsContainer.className = 'code-block-buttons';
+                        buttonsContainer.appendChild(previewButton);
+                        buttonsContainer.appendChild(applyButton);
+                        
+                        codeContainer.insertBefore(buttonsContainer, block);
+                        
+                        // Add click handlers
+                        previewButton.onclick = () => {
+                            // Create and show preview popup
+                            const previewPopup = document.createElement('div');
+                            previewPopup.className = 'code-preview-popup';
+                            previewPopup.innerHTML = `
+                                <div class="preview-header">
+                                    <span class="preview-title">Preview Changes</span>
+                                    <div class="preview-actions">
+                                        <button class="apply-preview-btn">Apply</button>
+                                        <button class="cancel-preview-btn">Cancel</button>
+                                    </div>
+                                </div>
+                                <div class="preview-diff"></div>
+                            `;
+                            
+                            document.body.appendChild(previewPopup);
+                            
+                            // Position popup near the code block
+                            const rect = block.getBoundingClientRect();
+                            previewPopup.style.top = `${rect.top}px`;
+                            previewPopup.style.left = `${rect.right + 10}px`;
+                            
+                            // Show diff preview
+                            const newCode = block.textContent;
+                            const currentCode = lastSelection ? sourceEditor.getModel().getValueInRange(lastSelection) : '';
+                            
+                            // Create diff view
+                            const originalModel = monaco.editor.createModel(currentCode);
+                            const modifiedModel = monaco.editor.createModel(newCode);
+                            
+                            const diffContainer = previewPopup.querySelector('.preview-diff');
+                            const diffEditor = monaco.editor.createDiffEditor(diffContainer, {
+                                readOnly: true,
+                                renderSideBySide: true,
+                                minimap: { enabled: false }
+                            });
+                            
+                            diffEditor.setModel({
+                                original: originalModel,
+                                modified: modifiedModel
+                            });
+                            
+                            // Handle apply button click
+                            previewPopup.querySelector('.apply-preview-btn').onclick = () => {
+                                if (lastSelection) {
+                                    sourceEditor.executeEdits('chat-suggestion', [{
+                                        range: lastSelection,
+                                        text: newCode,
+                                        forceMoveMarkers: true
+                                    }]);
+                                }
+                                previewPopup.remove();
+                                originalModel.dispose();
+                                modifiedModel.dispose();
+                            };
+                            
+                            // Handle cancel button click
+                            previewPopup.querySelector('.cancel-preview-btn').onclick = () => {
+                                previewPopup.remove();
+                                originalModel.dispose();
+                                modifiedModel.dispose();
+                            };
+                        };
+                        
+                        applyButton.onclick = () => {
+                            if (lastSelection) {
+                                // Clean up the code before applying
+                                const cleanCode = block.textContent
+                                    .replace(/\r\n/g, '\n') // Normalize line endings
+                                    .trim(); // Remove leading/trailing whitespace
+                                
+                                sourceEditor.executeEdits('chat-suggestion', [{
+                                    range: lastSelection,
+                                    text: cleanCode,
+                                    forceMoveMarkers: true
+                                }]);
+                            } else {
+                                showError('Error', 'Please select the code you want to replace first.');
+                            }
+                        };
                     });
                 }
                 
@@ -1363,49 +1881,47 @@ ${context.output}
 
 function gatherCodeContext() {
     // Get currently selected code and its position
-    const selection = sourceEditor.getSelection();
     let selectedContext = {};
     let surroundingCode = '';
     let lastEndLine;
     
-    if (selection && !selection.isEmpty()) {
+    // Use lastSelection if available
+    if (lastSelection && lastSelectionText) {
         const model = sourceEditor.getModel();
         selectedContext = {
-            code: model.getValueInRange(selection),
-            startLine: selection.startLineNumber,
-            endLine: selection.endLineNumber,
+            code: lastSelectionText,
+            startLine: lastSelection.startLineNumber,
+            endLine: lastSelection.endLineNumber,
             totalLines: model.getLineCount()
         };
 
-        // Get surrounding context (a few lines before and after selection if available)
-        const CONTEXT_LINES = 3; // Number of lines to include before and after selection
+        // Get surrounding context (a few lines before and after selection)
+        const CONTEXT_LINES = 3;
         
-        if (selectedContext.code) {
-            const startLine = Math.max(1, selectedContext.startLine - CONTEXT_LINES);
-            lastEndLine = Math.min(selectedContext.totalLines, selectedContext.endLine + CONTEXT_LINES);
-            
-            if (startLine < selectedContext.startLine) {
-                surroundingCode += `// Lines ${startLine} to ${selectedContext.startLine - 1}\n`;
-                surroundingCode += model.getValueInRange({
-                    startLineNumber: startLine,
-                    endLineNumber: selectedContext.startLine - 1,
-                    startColumn: 1,
-                    endColumn: model.getLineMaxColumn(selectedContext.startLine - 1)
-                }) + '\n';
-            }
-            
-            surroundingCode += `// Selected code (lines ${selectedContext.startLine} to ${selectedContext.endLine})\n`;
-            surroundingCode += selectedContext.code + '\n';
-            
-            if (lastEndLine > selectedContext.endLine) {
-                surroundingCode += `// Lines ${selectedContext.endLine + 1} to ${lastEndLine}\n`;
-                surroundingCode += model.getValueInRange({
-                    startLineNumber: selectedContext.endLine + 1,
-                    endLineNumber: lastEndLine,
-                    startColumn: 1,
-                    endColumn: model.getLineMaxColumn(lastEndLine)
-                });
-            }
+        const startLine = Math.max(1, selectedContext.startLine - CONTEXT_LINES);
+        lastEndLine = Math.min(selectedContext.totalLines, selectedContext.endLine + CONTEXT_LINES);
+        
+        if (startLine < selectedContext.startLine) {
+            surroundingCode += `// Lines ${startLine} to ${selectedContext.startLine - 1}\n`;
+            surroundingCode += model.getValueInRange({
+                startLineNumber: startLine,
+                endLineNumber: selectedContext.startLine - 1,
+                startColumn: 1,
+                endColumn: model.getLineMaxColumn(selectedContext.startLine - 1)
+            }) + '\n';
+        }
+        
+        surroundingCode += `// Selected code (lines ${selectedContext.startLine} to ${selectedContext.endLine})\n`;
+        surroundingCode += selectedContext.code + '\n';
+        
+        if (lastEndLine > selectedContext.endLine) {
+            surroundingCode += `// Lines ${selectedContext.endLine + 1} to ${lastEndLine}\n`;
+            surroundingCode += model.getValueInRange({
+                startLineNumber: selectedContext.endLine + 1,
+                endLineNumber: lastEndLine,
+                startColumn: 1,
+                endColumn: model.getLineMaxColumn(lastEndLine)
+            });
         }
     }
 
