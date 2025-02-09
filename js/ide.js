@@ -553,6 +553,208 @@ document.addEventListener("DOMContentLoaded", async function () {
     require(["vs/editor/editor.main"], function (ignorable) {
         layout = new GoldenLayout(layoutConfig, $("#judge0-site-content"));
 
+        let selectionActionBtn = null;
+
+        function createSelectionButton() {
+            if (!selectionActionBtn) {
+                selectionActionBtn = document.createElement('button');
+                selectionActionBtn.className = 'selection-action-btn';
+                selectionActionBtn.setAttribute('type', 'button');
+                document.body.appendChild(selectionActionBtn);
+            }
+            return selectionActionBtn;
+        }
+
+        function handleSelection(editor) {
+            const selection = editor.getSelection();
+            if (!selection) return;
+            
+            const selectedText = editor.getModel().getValueInRange(selection);
+            
+            if (!selectedText || !selectedText.trim()) {
+                if (selectionActionBtn) {
+                    selectionActionBtn.classList.remove('visible');
+                }
+                return;
+            }
+
+            // Get coordinates
+            const startPos = selection.getStartPosition();
+            const startCoords = editor.getScrolledVisiblePosition(startPos);
+            
+            // Get editor container position
+            const editorContainer = editor.getDomNode();
+            const rect = editorContainer.getBoundingClientRect();
+            
+            // Create and position the button
+            const btn = createSelectionButton();
+            
+            // Position button near the start of the selection
+            const x = rect.left + startCoords.left - 30;
+            const y = rect.top + startCoords.top - 30;
+            
+            btn.style.left = `${x}px`;
+            btn.style.top = `${y}px`;
+            btn.classList.add('visible');
+
+            // Remove old event listeners
+            const newBtn = btn.cloneNode(true);
+            btn.parentNode.replaceChild(newBtn, btn);
+            selectionActionBtn = newBtn;
+
+            // Add click handler
+            selectionActionBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                
+                // Create popup
+                const popupX = x + 60;  // Offset from the button
+                const popupY = y + 60;
+                
+                showInlinePopup(popupX, popupY, selectedText);
+                
+                selectionActionBtn.classList.remove('visible');
+            });
+        }
+
+        function formatCodeBlock(code, language = '') {
+            return `<pre><code class="language-${language}">${escapeHtml(code)}</code></pre>`;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function detectLanguage(code) {
+            // Simple language detection based on common patterns
+            if (code.includes('function') || code.includes('const') || code.includes('let')) return 'javascript';
+            if (code.includes('class') && code.includes('def')) return 'python';
+            if (code.includes('#include')) return 'cpp';
+            if (code.includes('public class')) return 'java';
+            return '';
+        }
+
+        function formatMarkdown(text) {
+            // Basic markdown formatting
+            return text
+                // Code blocks with language
+                .replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) => 
+                    formatCodeBlock(code.trim(), lang || detectLanguage(code))
+                )
+                // Inline code
+                .replace(/`([^`]+)`/g, '<code>$1</code>')
+                // Headers
+                .replace(/^### (.*$)/gm, '<h3>$1</h3>')
+                .replace(/^## (.*$)/gm, '<h2>$1</h2>')
+                .replace(/^# (.*$)/gm, '<h1>$1</h1>')
+                // Bold
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                // Italic
+                .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                // Lists
+                .replace(/^\s*[-*+]\s+(.*)$/gm, '<li>$1</li>')
+                .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
+                // Numbered lists
+                .replace(/^\d+\.\s+(.*)$/gm, '<li>$1</li>')
+                .replace(/(<li>.*<\/li>\n?)+/g, '<ol>$&</ol>')
+                // Links
+                .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
+                // Blockquotes
+                .replace(/^\>\s(.*)$/gm, '<blockquote>$1</blockquote>')
+                // Paragraphs
+                .replace(/^(?!<[hou]|<blockquote|<pre|<li).+$/gm, '<p>$&</p>')
+                // Line breaks
+                .replace(/\n\s*\n/g, '<br>');
+        }
+
+        function showInlinePopup(x, y, selectedText) {
+            // Create popup container
+            const popup = document.createElement('div');
+            popup.className = 'inline-popup';
+            popup.style.left = `${x}px`;
+            popup.style.top = `${y}px`;
+            
+            // Create content
+            popup.innerHTML = `
+                <div class="popup-actions">
+                    <button class="action-btn explain">Explain Code</button>
+                    <button class="action-btn improve">Improve Code</button>
+                    <button class="action-btn docs">Generate Docs</button>
+                    <button class="action-btn test">Generate Tests</button>
+                </div>
+                <div class="popup-content"></div>
+            `;
+
+            // Remove existing popup if any
+            const existingPopup = document.querySelector('.inline-popup');
+            if (existingPopup) {
+                existingPopup.remove();
+            }
+
+            // Add to document
+            document.body.appendChild(popup);
+
+            // Handle action clicks
+            const actions = popup.querySelectorAll('.action-btn');
+            const content = popup.querySelector('.popup-content');
+
+            actions.forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const action = btn.classList[1];
+                    let prompt = '';
+                    
+                    switch(action) {
+                        case 'explain':
+                            prompt = `Explain this code:\n${selectedText}`;
+                            break;
+                        case 'improve':
+                            prompt = `Suggest improvements for this code:\n${selectedText}`;
+                            break;
+                        case 'docs':
+                            prompt = `Generate documentation for this code:\n${selectedText}`;
+                            break;
+                        case 'test':
+                            prompt = `Generate unit tests for this code:\n${selectedText}`;
+                            break;
+                    }
+
+                    content.innerHTML = '<div class="loading">Processing...</div>';
+                    
+                    try {
+                        const model = modelSelect.val();
+                        const apiKey = apiKeyInput.val().trim();
+                        
+                        if (!apiKey) {
+                            content.innerHTML = '<div class="error">Please enter an API key first.</div>';
+                            return;
+                        }
+
+                        const response = await callAI(model, apiKey, prompt);
+                        content.innerHTML = `<div class="response">${formatMarkdown(response)}</div>`;
+                        
+                        // Apply syntax highlighting to code blocks
+                        content.querySelectorAll('pre code').forEach(block => {
+                            if (window.hljs) {
+                                hljs.highlightElement(block);
+                            }
+                        });
+                    } catch (error) {
+                        content.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+                    }
+                });
+            });
+
+            // Close popup when clicking outside
+            document.addEventListener('click', function closePopup(e) {
+                if (!popup.contains(e.target) && !selectionActionBtn.contains(e.target)) {
+                    popup.remove();
+                    document.removeEventListener('click', closePopup);
+                }
+            });
+        }
+
         layout.registerComponent("source", function (container, state) {
             sourceEditor = monaco.editor.create(container.getElement()[0], {
                 automaticLayout: true,
@@ -562,6 +764,37 @@ document.addEventListener("DOMContentLoaded", async function () {
                 fontFamily: "JetBrains Mono",
                 minimap: {
                     enabled: true
+                }
+            });
+
+            // Add selection change handler
+            sourceEditor.onDidChangeCursorSelection(() => {
+                handleSelection(sourceEditor);
+            });
+
+            // Hide button when editor loses focus
+            sourceEditor.onDidBlurEditorText(() => {
+                if (selectionActionBtn) {
+                    setTimeout(() => {
+                        if (!selectionActionBtn.matches(':hover')) {
+                            selectionActionBtn.classList.remove('visible');
+                        }
+                    }, 200);
+                }
+            });
+
+            // Add keyboard shortcut
+            sourceEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, () => {
+                const selection = sourceEditor.getSelection();
+                if (selection && !selection.isEmpty()) {
+                    const selectedText = sourceEditor.getModel().getValueInRange(selection);
+                    const pos = sourceEditor.getScrolledVisiblePosition(selection.getStartPosition());
+                    const editorRect = sourceEditor.getDomNode().getBoundingClientRect();
+                    showInlinePopup(
+                        editorRect.left + pos.left + 30,
+                        editorRect.top + pos.top + 30,
+                        selectedText
+                    );
                 }
             });
 
@@ -596,11 +829,25 @@ document.addEventListener("DOMContentLoaded", async function () {
 
         layout.registerComponent("chat", function(container, state) {
             const $el = container.getElement();
+            
+            // Generate model options from configuration
+            const modelOptions = Object.entries(AI_MODELS).flatMap(([provider, config]) =>
+                Object.entries(config.models).map(([id, model]) => 
+                    `<option value="${id}">${model.name}</option>`
+                )
+            ).join('');
+
             $el.html(`
                 <div class="chat-container">
+                    <div class="chat-header">
+                        <select class="chat-model-select">
+                            ${modelOptions}
+                        </select>
+                        <input type="password" class="chat-api-key" placeholder="Enter your API key">
+                    </div>
                     <div class="chat-messages"></div>
                     <div class="chat-input-container">
-                        <input type="text" class="chat-input" placeholder="Type your message...">
+                        <input type="text" class="chat-input" placeholder="Ask here...">
                         <button class="chat-send-btn">Send</button>
                     </div>
                 </div>
@@ -609,23 +856,96 @@ document.addEventListener("DOMContentLoaded", async function () {
             const chatInput = $el.find('.chat-input');
             const chatSend = $el.find('.chat-send-btn');
             const chatMessages = $el.find('.chat-messages');
+            const modelSelect = $el.find('.chat-model-select');
+            const apiKeyInput = $el.find('.chat-api-key');
+
+            // Load saved API key if exists
+            const savedApiKey = localStorage.getItem('chat_api_key');
+            if (savedApiKey) {
+                apiKeyInput.val(savedApiKey);
+            }
+
+            // Load saved model if exists
+            const savedModel = localStorage.getItem('chat_model');
+            if (savedModel) {
+                modelSelect.val(savedModel);
+            }
+
+            // Save API key when changed
+            apiKeyInput.on('change', function() {
+                const apiKey = $(this).val().trim();
+                if (apiKey) {
+                    localStorage.setItem('chat_api_key', apiKey);
+                } else {
+                    localStorage.removeItem('chat_api_key');
+                }
+            });
+
+            // Save model when changed
+            modelSelect.on('change', function() {
+                localStorage.setItem('chat_model', $(this).val());
+            });
 
             function addMessage(text, isUser = true) {
                 const messageDiv = document.createElement('div');
                 messageDiv.className = `chat-message ${isUser ? 'outgoing' : 'incoming'}`;
-                messageDiv.textContent = text;
+                
+                if (isUser) {
+                    messageDiv.textContent = text;
+                } else {
+                    // Format AI responses
+                    messageDiv.innerHTML = formatMarkdown(text);
+                    
+                    // Apply syntax highlighting to code blocks
+                    messageDiv.querySelectorAll('pre code').forEach(block => {
+                        if (window.hljs) {
+                            hljs.highlightElement(block);
+                        }
+                    });
+                }
+                
                 chatMessages[0].appendChild(messageDiv);
                 chatMessages[0].scrollTop = chatMessages[0].scrollHeight;
             }
 
-            chatSend.on('click', () => {
+            chatSend.on('click', async () => {
                 const message = chatInput.val().trim();
+                const apiKey = apiKeyInput.val().trim();
+                const model = modelSelect.val();
+
+                if (!apiKey) {
+                    addMessage('Please enter an API key first.', false);
+                    return;
+                }
+
                 if (message) {
+                    // Show the user's message
                     addMessage(message, true);
                     chatInput.val('');
-                    setTimeout(() => {
-                        addMessage('This is a mock response. Implement actual chat functionality here.', false);
-                    }, 1000);
+                    
+                    // Show thinking message
+                    const thinkingMessage = `Thinking... (using ${model})`;
+                    addMessage(thinkingMessage, false);
+
+                    try {
+                        const response = await callAI(model, apiKey, message);
+                        
+                        // Replace thinking message with actual response
+                        const lastMessage = chatMessages[0].lastElementChild;
+                        lastMessage.innerHTML = formatMarkdown(response);
+                        
+                        // Apply syntax highlighting to code blocks
+                        lastMessage.querySelectorAll('pre code').forEach(block => {
+                            if (window.hljs) {
+                                hljs.highlightElement(block);
+                            }
+                        });
+                    } catch (error) {
+                        // Replace thinking message with error
+                        const lastMessage = chatMessages[0].lastElementChild;
+                        lastMessage.textContent = `Error: ${error.message}`;
+                        lastMessage.style.color = 'var(--vscode-errorForeground, #f48771)';
+                    }
                 }
             });
 
@@ -896,4 +1216,264 @@ const EXTENSIONS_TABLE = {
 
 function getLanguageForExtension(extension) {
     return EXTENSIONS_TABLE[extension] || { "flavor": CE, "language_id": 43 }; // Plain Text (https://ce.judge0.com/languages/43)
+}
+
+const AI_MODELS = {
+    'openai': {
+        baseURL: 'https://api.openai.com/v1/chat/completions',
+        models: {
+            'gpt-4': {
+                name: 'GPT-4',
+                maxTokens: 4096
+            },
+            'gpt-3.5-turbo': {
+                name: 'GPT-3.5 Turbo',
+                maxTokens: 4096
+            }
+        },
+        headers: (apiKey) => ({
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+        }),
+        prepareRequest: (model, message) => ({
+            model: model,
+            messages: [{
+                role: 'user',
+                content: message
+            }],
+            temperature: 0.7
+        }),
+        extractResponse: (data) => data.choices[0].message.content
+    },
+    'anthropic': {
+        baseURL: 'https://api.anthropic.com/v1/messages',
+        models: {
+            'claude-3-opus': {
+                name: 'Claude 3 Opus',
+                maxTokens: 4096
+            },
+            'claude-3-sonnet': {
+                name: 'Claude 3 Sonnet',
+                maxTokens: 4096
+            }
+        },
+        headers: (apiKey) => ({
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01'
+        }),
+        prepareRequest: (model, message) => ({
+            model: model,
+            messages: [{
+                role: 'user',
+                content: message
+            }],
+            max_tokens: 1024
+        }),
+        extractResponse: (data) => data.content[0].text
+    },
+    'google': {
+        baseURL: (apiKey) => `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${apiKey}`,
+        models: {
+            'gemini-pro': {
+                name: 'Gemini Pro',
+                maxTokens: 2048
+            }
+        },
+        headers: () => ({
+            'Content-Type': 'application/json'
+        }),
+        prepareRequest: (model, message) => ({
+            contents: [{
+                parts: [{
+                    text: message
+                }]
+            }]
+        }),
+        extractResponse: (data) => data.candidates[0].content.parts[0].text
+    },
+    // Example of how to add a new provider:
+    'deepseek': {
+        baseURL: 'https://api.deepseek.com/v1/chat/completions',  // Replace with actual API endpoint
+        models: {
+            'deepseek-coder': {
+                name: 'DeepSeek Coder',
+                maxTokens: 4096
+            }
+        },
+        headers: (apiKey) => ({
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+        }),
+        prepareRequest: (model, message) => ({
+            model: model,
+            messages: [{
+                role: 'user',
+                content: message
+            }],
+            temperature: 0.7
+        }),
+        extractResponse: (data) => data.choices[0].message.content
+    }
+};
+
+async function callAI(model, apiKey, message) {
+    try {
+        const provider = Object.entries(AI_MODELS).find(([_, config]) => 
+            Object.keys(config.models).includes(model)
+        );
+
+        if (!provider) {
+            throw new Error(`Unsupported model: ${model}`);
+        }
+
+        const [providerName, config] = provider;
+        
+        // By default include context, unless message starts with /plain
+        let fullMessage = message;
+        if (!message.trim().startsWith('/plain')) {
+            const context = gatherCodeContext();
+            let contextMessage = `Context:
+Language: ${context.language}
+
+`;
+
+            if (context.hasSelection) {
+                contextMessage += `Selected code with surrounding context (lines ${context.selectionInfo.startLine}-${context.selectionInfo.endLine}):
+\`\`\`${context.language.toLowerCase()}
+${context.code}
+\`\`\`
+`;
+            } else {
+                contextMessage += `Full code:
+\`\`\`${context.language.toLowerCase()}
+${context.code}
+\`\`\`
+`;
+            }
+
+            if (context.input) {
+                contextMessage += `\nInput:
+\`\`\`
+${context.input}
+\`\`\`
+`;
+            }
+
+            if (context.output) {
+                contextMessage += `\nOutput:
+\`\`\`
+${context.output}
+\`\`\`
+`;
+            }
+
+            if (context.statusLine) {
+                contextMessage += `\nStatus: ${context.statusLine}`;
+            }
+
+            if (context.compilerOptions) {
+                contextMessage += `\nCompiler Options: ${context.compilerOptions}`;
+            }
+
+            fullMessage = contextMessage + `\nQuestion: ${message.trim()}`;
+        } else {
+            fullMessage = message.substring(6).trim();
+        }
+
+        const baseURL = typeof config.baseURL === 'function' 
+            ? config.baseURL(apiKey) 
+            : config.baseURL;
+
+        const response = await fetch(baseURL, {
+            method: 'POST',
+            headers: config.headers(apiKey),
+            body: JSON.stringify(config.prepareRequest(model, fullMessage))
+        });
+
+        if (!response.ok) {
+            throw new Error(`${providerName} API error: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        return config.extractResponse(data);
+    } catch (error) {
+        console.error(`${error.message}`);
+        throw error;
+    }
+}
+
+function gatherCodeContext() {
+    // Get currently selected code and its position
+    const selection = sourceEditor.getSelection();
+    let selectedContext = {};
+    let surroundingCode = '';
+    let lastEndLine;
+    
+    if (selection && !selection.isEmpty()) {
+        const model = sourceEditor.getModel();
+        selectedContext = {
+            code: model.getValueInRange(selection),
+            startLine: selection.startLineNumber,
+            endLine: selection.endLineNumber,
+            totalLines: model.getLineCount()
+        };
+
+        // Get surrounding context (a few lines before and after selection if available)
+        const CONTEXT_LINES = 3; // Number of lines to include before and after selection
+        
+        if (selectedContext.code) {
+            const startLine = Math.max(1, selectedContext.startLine - CONTEXT_LINES);
+            lastEndLine = Math.min(selectedContext.totalLines, selectedContext.endLine + CONTEXT_LINES);
+            
+            if (startLine < selectedContext.startLine) {
+                surroundingCode += `// Lines ${startLine} to ${selectedContext.startLine - 1}\n`;
+                surroundingCode += model.getValueInRange({
+                    startLineNumber: startLine,
+                    endLineNumber: selectedContext.startLine - 1,
+                    startColumn: 1,
+                    endColumn: model.getLineMaxColumn(selectedContext.startLine - 1)
+                }) + '\n';
+            }
+            
+            surroundingCode += `// Selected code (lines ${selectedContext.startLine} to ${selectedContext.endLine})\n`;
+            surroundingCode += selectedContext.code + '\n';
+            
+            if (lastEndLine > selectedContext.endLine) {
+                surroundingCode += `// Lines ${selectedContext.endLine + 1} to ${lastEndLine}\n`;
+                surroundingCode += model.getValueInRange({
+                    startLineNumber: selectedContext.endLine + 1,
+                    endLineNumber: lastEndLine,
+                    startColumn: 1,
+                    endColumn: model.getLineMaxColumn(lastEndLine)
+                });
+            }
+        }
+    }
+
+    const context = {
+        language: $selectLanguage.find(":selected").text(),
+        input: stdinEditor.getValue(),
+        output: stdoutEditor.getValue(),
+        compilerOptions: $compilerOptions.val(),
+        statusLine: $statusLine.html()
+    };
+
+    // Format the message based on whether there's a selection or not
+    let codeContext;
+    if (selectedContext.code) {
+        codeContext = surroundingCode;
+        if (selectedContext.totalLines > lastEndLine) {
+            codeContext += '\n// ... rest of the file ...';
+        }
+    } else {
+        codeContext = sourceEditor.getValue();
+    }
+
+    return {
+        ...context,
+        code: codeContext,
+        hasSelection: !!selectedContext.code,
+        selectionInfo: selectedContext
+    };
 }

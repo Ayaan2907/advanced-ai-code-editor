@@ -30,6 +30,40 @@
     font-family: "JetBrains Mono", monospace;
 }
 
+.chat-header {
+    padding: 10px;
+    border-bottom: 1px solid var(--vscode-panel-border, #3c3c3c);
+}
+
+.chat-header select {
+    width: 100%;
+    background: var(--vscode-dropdown-background, #3c3c3c);
+    color: var(--vscode-dropdown-foreground, #cccccc);
+    border: 1px solid var(--vscode-dropdown-border, #3c3c3c);
+    border-radius: 4px;
+    padding: 6px 8px;
+    margin-bottom: 8px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13px;
+}
+
+.chat-header input {
+    width: 100%;
+    background: var(--vscode-input-background, #3c3c3c);
+    color: var(--vscode-input-foreground, #cccccc);
+    border: 1px solid var(--vscode-input-border, #3c3c3c);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13px;
+}
+
+.chat-header input:focus,
+.chat-header select:focus {
+    outline: none;
+    border-color: var(--vscode-focusBorder, #007fd4);
+}
+
 .chat-messages {
     flex: 1;
     overflow-y: auto;
@@ -46,6 +80,7 @@
     word-wrap: break-word;
     font-size: 13px;
     line-height: 1.4;
+    white-space: pre-wrap;
 }
 
 .chat-message.outgoing {
@@ -120,4 +155,137 @@
 .lm_tab.lm_active {
     background: var(--vscode-tab-activeBackground, #1e1e1e) !important;
     color: var(--vscode-tab-activeForeground, #ffffff) !important;
+}
+
+/* Code block formatting */
+.chat-message pre {
+    background-color: var(--vscode-editor-background, #1e1e1e);
+    border: 1px solid var(--vscode-panel-border, #3c3c3c);
+    border-radius: 4px;
+    padding: 8px;
+    margin: 8px 0;
+    overflow-x: auto;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.chat-message code {
+    font-family: 'JetBrains Mono', monospace;
+    background-color: var(--vscode-editor-background, #1e1e1e);
+    padding: 2px 4px;
+    border-radius: 3px;
+}
+
+/* Markdown formatting */
+.chat-message h1, 
+.chat-message h2, 
+.chat-message h3, 
+.chat-message h4 {
+    margin-top: 16px;
+    margin-bottom: 8px;
+    color: var(--vscode-editor-foreground, #d4d4d4);
+}
+
+.chat-message p {
+    margin: 8px 0;
+}
+
+.chat-message ul, 
+.chat-message ol {
+    margin: 8px 0;
+    padding-left: 20px;
+}
+
+.chat-message li {
+    margin: 4px 0;
+}
+
+.chat-message blockquote {
+    border-left: 3px solid var(--vscode-button-background, #0e639c);
+    margin: 8px 0;
+    padding-left: 12px;
+    color: var(--vscode-descriptionForeground, #cccccc);
+}
+
+.chat-message a {
+    color: var(--vscode-textLink-foreground, #3794ff);
+    text-decoration: none;
+}
+
+.chat-message a:hover {
+    text-decoration: underline;
+}
+
+.chat-message table {
+    border-collapse: collapse;
+    margin: 8px 0;
+    width: 100%;
+}
+
+.chat-message th,
+.chat-message td {
+    border: 1px solid var(--vscode-panel-border, #3c3c3c);
+    padding: 6px 8px;
+}
+
+.chat-message th {
+    background-color: var(--vscode-editor-background, #1e1e1e);
+}
+
+/* Syntax highlighting for code blocks */
+.chat-message .hljs-keyword,
+.chat-message .hljs-selector-tag,
+.chat-message .hljs-built_in,
+.chat-message .hljs-name,
+.chat-message .hljs-tag {
+    color: #569cd6;
+}
+
+.chat-message .hljs-string,
+.chat-message .hljs-title,
+.chat-message .hljs-section,
+.chat-message .hljs-attribute,
+.chat-message .hljs-literal,
+.chat-message .hljs-template-tag,
+.chat-message .hljs-template-variable,
+.chat-message .hljs-type,
+.chat-message .hljs-addition {
+    color: #ce9178;
+}
+
+.chat-message .hljs-comment,
+.chat-message .hljs-quote,
+.chat-message .hljs-deletion,
+.chat-message .hljs-meta {
+    color: #6a9955;
+}
+
+.chat-message .hljs-number,
+.chat-message .hljs-regexp,
+.chat-message .hljs-literal,
+.chat-message .hljs-variable,
+.chat-message .hljs-template-variable {
+    color: #b5cea8;
+}
+
+/* Loading animation */
+.chat-message .loading {
+    color: var(--vscode-descriptionForeground, #cccccc);
+    font-style: italic;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.chat-message .loading::after {
+    content: '';
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--vscode-button-background, #0e639c);
+    border-radius: 50%;
+    border-top-color: transparent;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
 }
