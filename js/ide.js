@@ -637,11 +637,8 @@ document.addEventListener("DOMContentLoaded", async function () {
         }
 
         function formatCodeBlock(code, language = '') {
-            // Trim any extra whitespace and normalize line endings
-            const normalizedCode = code.replace(/\r\n/g, '\n').trim();
-            // Remove any leading/trailing empty lines
-            const cleanedCode = normalizedCode.replace(/^\n+|\n+$/g, '');
-            return `<pre><code class="language-${language}">${escapeHtml(cleanedCode)}</code></pre>`;
+       // Escape HTML and clean up code block by trimming whitespace and normalizing line endings
+            return escapeHtml(code.trim().replace(/\r\n/g, '\n').replace(/^\n+|\n+$/g, ''));
         }
 
         function escapeHtml(text) {
